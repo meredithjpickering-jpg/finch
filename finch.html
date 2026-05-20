@@ -1,0 +1,1202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Finch · Financial Health</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;1,400&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+/*
+=======================================================
+FINCH — run this SQL in Supabase editor:
+
+CREATE TABLE IF NOT EXISTS fin_transactions (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  date date NOT NULL DEFAULT CURRENT_DATE,
+  amount decimal(10,2) NOT NULL,
+  category text NOT NULL,
+  note text,
+  type text DEFAULT 'expense',
+  source text,
+  created_at timestamptz DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS fin_snapshots (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  date date NOT NULL,
+  chequing decimal(10,2),
+  savings decimal(10,2),
+  tfsa decimal(10,2),
+  moka decimal(10,2),
+  credit_card decimal(10,2),
+  loan decimal(10,2),
+  note text,
+  created_at timestamptz DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS fin_budgets (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  month_key text NOT NULL,
+  category text NOT NULL,
+  amount decimal(10,2) NOT NULL,
+  UNIQUE(month_key, category)
+);
+CREATE TABLE IF NOT EXISTS fin_moka_entries (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  date date NOT NULL UNIQUE,
+  balance decimal(10,2) NOT NULL,
+  note text,
+  created_at timestamptz DEFAULT now()
+);
+ALTER TABLE fin_moka_entries ADD COLUMN IF NOT EXISTS entry_type text DEFAULT 'interest';
+ALTER TABLE fin_moka_entries ADD COLUMN IF NOT EXISTS deposit_amount decimal(10,2);
+ALTER TABLE fin_transactions DISABLE ROW LEVEL SECURITY;
+ALTER TABLE fin_snapshots DISABLE ROW LEVEL SECURITY;
+ALTER TABLE fin_budgets DISABLE ROW LEVEL SECURITY;
+ALTER TABLE fin_moka_entries DISABLE ROW LEVEL SECURITY;
+=======================================================
+*/
+:root{
+  --bg:#150F24;--card:#1E1530;--surface:#241840;
+  --border:rgba(180,150,220,.10);--border2:rgba(180,150,220,.20);
+  --accent:#C8B0E8;--accent2:#7858A8;
+  --pos:#7EC8A0;--warn:#E8B870;--neg:#E89060;--neg2:#E06040;
+  --text:#EEE0F8;--mid:#B0A0C8;--muted:#6A5880;
+  --r:10px;--rs:6px;
+  --fd:'Playfair Display',Georgia,serif;
+  --fb:'DM Sans',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--fb);background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;line-height:1.6}
+.hdr{background:var(--card);height:50px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;position:sticky;top:0;z-index:200;border-bottom:1px solid var(--border)}
+.hdr-brand{font-family:var(--fd);font-style:italic;font-size:18px;color:var(--text);letter-spacing:.01em}
+.hdr-right{display:flex;align-items:center;gap:10px}
+.hdr-date{font-size:10px;color:var(--muted);letter-spacing:.07em;text-transform:uppercase}
+.tabs{background:var(--card);border-bottom:1px solid var(--border);display:flex;position:sticky;top:50px;z-index:100;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{padding:10px 16px;font-size:11px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap;letter-spacing:.05em;text-transform:uppercase;cursor:pointer;transition:.15s;flex:1;text-align:center}
+.tab:hover{color:var(--accent)}.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.main{max-width:900px;margin:0 auto;padding:18px 14px}
+.section{display:none}.section.active{display:block}
+.card{background:var(--card);border-radius:var(--r);border:1px solid var(--border);padding:16px 18px;margin-bottom:12px}
+.card-title{font-family:var(--fd);font-style:italic;font-size:15px;color:var(--text);margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+@media(max-width:640px){.g4{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1fr 1fr}.g2{grid-template-columns:1fr}}
+.stat{background:var(--surface);border-radius:var(--rs);padding:13px 15px;border:1px solid var(--border)}
+.stat-lbl{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:5px}
+.stat-val{font-size:20px;font-family:var(--fd);color:var(--text);line-height:1.1}
+.stat-sub{font-size:11px;color:var(--muted);margin-top:3px}
+.lbl{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:5px;display:block}
+.inp{width:100%;padding:8px 11px;border:1px solid var(--border2);border-radius:var(--rs);font-family:var(--fb);font-size:13px;color:var(--text);background:var(--surface);outline:none;transition:.15s}
+.inp:focus{border-color:var(--accent)}
+textarea.inp{resize:vertical;min-height:60px;line-height:1.5}
+select.inp{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236A5880'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}
+.btn{padding:9px 18px;border-radius:var(--rs);font-family:var(--fb);font-size:13px;font-weight:500;cursor:pointer;border:none;transition:.15s}
+.btn-p{background:rgba(200,176,232,.12);color:var(--accent);border:1px solid var(--border2)}.btn-p:hover{background:rgba(200,176,232,.22)}
+.btn-a{background:var(--accent2);color:var(--text);border:none}.btn-a:hover{opacity:.85}
+.btn-d{background:rgba(224,96,64,.15);color:var(--neg);border:1px solid rgba(224,96,64,.25)}.btn-d:hover{background:rgba(224,96,64,.25)}
+.btn-sm{padding:5px 12px;font-size:11px}.btn-xs{padding:3px 8px;font-size:10px;border-radius:5px}
+.btn-row{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+.form-row{margin-bottom:12px}
+.overlay{position:fixed;inset:0;background:rgba(8,4,18,.75);z-index:300;display:none;align-items:center;justify-content:center;padding:20px}
+.overlay.open{display:flex}
+.modal{background:var(--card);border-radius:var(--r);width:100%;max-width:480px;max-height:90vh;overflow-y:auto;padding:20px 22px;border:1px solid var(--border2)}
+.modal-title{font-family:var(--fd);font-style:italic;font-size:17px;color:var(--text);margin-bottom:16px;display:flex;justify-content:space-between;align-items:center}
+.modal-close{font-size:22px;color:var(--muted);cursor:pointer;border:none;background:none;line-height:1;padding:0}
+.budget-row{padding:10px 0;border-bottom:1px solid var(--border)}
+.budget-row:last-child{border-bottom:none}
+.budget-row-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.budget-bar-wrap{position:relative;height:4px;background:rgba(200,176,232,.10);border-radius:2px;overflow:visible;margin-bottom:4px}
+.budget-bar{height:4px;border-radius:2px;transition:width .4s;max-width:100%}
+.budget-pace{position:absolute;top:-2px;width:1.5px;height:8px;background:rgba(255,255,255,.2);border-radius:1px}
+.tx-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)}
+.tx-row:last-child{border-bottom:none}
+.tx-amt{font-size:13px;font-weight:500;color:var(--neg);white-space:nowrap}
+.tx-amt.income{color:var(--pos)}
+.del-btn{font-size:15px;cursor:pointer;border:none;background:none;color:var(--muted);padding:0;opacity:.5;flex-shrink:0;line-height:1}
+.del-btn:hover{color:var(--neg);opacity:1}
+.trend-table{width:100%;border-collapse:collapse;font-size:12px}
+.trend-table th{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:500;padding:6px 8px;text-align:left;border-bottom:1px solid var(--border)}
+.trend-table td{padding:8px;border-bottom:1px solid var(--border);color:var(--text)}
+.trend-table tr:last-child td{border-bottom:none}
+.streak-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:500}
+.sb-pos{background:rgba(126,200,160,.15);color:var(--pos)}
+.sb-neg{background:rgba(232,144,96,.15);color:var(--neg)}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--surface);color:var(--text);padding:10px 20px;border-radius:20px;font-size:13px;z-index:999;transition:transform .3s;pointer-events:none;border:1px solid var(--border2);white-space:nowrap}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.loading{text-align:center;padding:36px;color:var(--muted);font-style:italic;font-family:var(--fd);font-size:13px}
+.empty{text-align:center;padding:20px;color:var(--muted);font-size:13px;font-style:italic}
+.ai-block{background:var(--surface);border:1px solid var(--border2);border-radius:var(--rs);padding:12px 14px;font-size:13px;color:var(--mid);line-height:1.7;margin-bottom:12px}
+.month-nav{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.month-label{font-family:var(--fd);font-style:italic;font-size:16px;color:var(--text);flex:1;text-align:center}
+.pace-bar-wrap{height:6px;background:rgba(200,176,232,.08);border-radius:3px;overflow:hidden;position:relative;margin:8px 0}
+.pace-bar-fill{height:100%;border-radius:3px;transition:width .5s}
+.sec-hd{font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);font-weight:500;padding:3px 0 3px 9px;border-left:2px solid var(--accent2);margin:14px 0 8px}
+.snap-row{display:flex;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)}
+.snap-row:last-child{border-bottom:none}
+.snap-acct{font-size:12px;color:var(--mid);min-width:120px}
+.snap-val{font-size:13px;font-weight:500;color:var(--text);flex:1}
+.snap-val.liability{color:var(--neg)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <div class="hdr-brand">Finch</div>
+  <div class="hdr-right">
+    <span class="hdr-date" id="hdrDate"></span>
+    <button class="btn btn-p btn-sm" onclick="openSettings()">⚙ Settings</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showTab('dashboard')">Dashboard</div>
+  <div class="tab" onclick="showTab('budget')">Budget</div>
+  <div class="tab" onclick="showTab('trends')">Trends</div>
+  <div class="tab" onclick="showTab('wealth')">Wealth</div>
+  <div class="tab" onclick="showTab('moka')">Moka</div>
+</div>
+
+<div class="main">
+  <div class="section active" id="section-dashboard"><div class="loading">Loading...</div></div>
+
+  <div class="section" id="section-budget">
+    <div class="month-nav">
+      <button class="btn btn-p btn-sm" onclick="budgetMonthNav(-1)">‹</button>
+      <div class="month-label" id="budgetMonthLabel"></div>
+      <button class="btn btn-p btn-sm" onclick="budgetMonthNav(1)">›</button>
+    </div>
+    <div style="text-align:right;margin-bottom:10px;margin-top:-8px">
+      <button class="btn btn-p btn-sm" onclick="openEditBudgetModal()" style="font-size:10px;opacity:.7">✎ Edit budgets</button>
+    </div>
+    <div id="budgetContent"><div class="loading">Loading...</div></div>
+  </div>
+
+  <div class="section" id="section-trends">
+    <div id="trendsContent"><div class="loading">Loading...</div></div>
+  </div>
+
+  <div class="section" id="section-wealth">
+    <div id="wealthContent"><div class="loading">Loading...</div></div>
+  </div>
+
+  <div class="section" id="section-moka">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div style="font-family:var(--fd);font-style:italic;font-size:20px;color:var(--text)">Moka</div>
+      <button class="btn btn-p btn-sm" onclick="openMokaModal()">+ Log entry</button>
+    </div>
+    <div id="mokaContent"><div class="loading">Loading...</div></div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" onclick="overlayClick(event)">
+  <div class="modal" id="modal">
+    <div class="modal-title">
+      <span id="modalTitleText"></span>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ── STATE ─────────────────────────────────────────────────────────
+let db = null, apiKey = '';
+const now = new Date();
+const TODAY = now.toISOString().split('T')[0];
+const MN = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MOKA_START = 19324;
+const MOKA_DATE = new Date('2026-05-01T12:00:00');
+
+let S = {
+  transactions: [],
+  snapshots: [],
+  mokaEntries: [],
+  budgets: {},
+  budgetMonth: `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`,
+};
+
+// ── BUDGET CONFIG ────────────────────────────────────────────────
+const DBUDGETS = {
+  '2026-05':{ label:'May 2026', total:1385, ei:0, note:'Rent pre-paid; no income this month', cats:[
+    {key:'rental_insurance',label:'Rental insurance',amt:20},
+    {key:'internet',label:'Internet',amt:60},{key:'hydro',label:'Hydro',amt:80},
+    {key:'phone',label:'Phone',amt:75},{key:'subscriptions',label:'Subscriptions',amt:57},
+    {key:'laundry',label:'Laundry',amt:40},{key:'transportation',label:'Transportation',amt:60},
+    {key:'groceries',label:'Groceries',amt:320},{key:'cat_supplies',label:'Cat supplies',amt:200},
+    {key:'beauty',label:'Beauty',amt:30},{key:'fun',label:'Fun',amt:100},
+    {key:'home',label:'Home',amt:50},{key:'misc',label:'Misc',amt:75},
+    {key:'vices',label:'Vices',amt:150},{key:'debt',label:'Debt minimums',amt:68},
+  ]},
+  '2026-06':{ label:'June 2026', total:3592, ei:2600, note:'EI ~$2,600/mo expected', cats:[
+    {key:'rent',label:'Rent',amt:1900},{key:'rental_insurance',label:'Rental insurance',amt:20},
+    {key:'internet',label:'Internet',amt:60},{key:'hydro',label:'Hydro',amt:80},
+    {key:'phone',label:'Phone',amt:75},{key:'subscriptions',label:'Subscriptions',amt:57},
+    {key:'laundry',label:'Laundry',amt:50},{key:'transportation',label:'Transportation',amt:100},
+    {key:'groceries',label:'Groceries',amt:350},{key:'cat_supplies',label:'Cat supplies',amt:200},
+    {key:'beauty',label:'Beauty',amt:50},{key:'fun',label:'Fun',amt:200},
+    {key:'home',label:'Home',amt:100},{key:'misc',label:'Misc',amt:100},
+    {key:'vices',label:'Vices',amt:200},{key:'clothes',label:'Clothes',amt:50},
+  ]},
+};
+DBUDGETS['2026-07'] = {...DBUDGETS['2026-06'], label:'July 2026'};
+
+const FIXED_CATS = new Set(['rent','rental_insurance','internet','hydro','phone','subscriptions','debt','laundry']);
+
+// ── INIT ─────────────────────────────────────────────────────────
+async function init(){
+  document.getElementById('hdrDate').textContent = now.toLocaleDateString('en-CA',{weekday:'short',month:'short',day:'numeric'}).toUpperCase();
+  const cfg = JSON.parse(localStorage.getItem('finch_cfg')||'{}');
+  apiKey = cfg.apiKey||'';
+  if(cfg.sbUrl&&cfg.sbKey){try{db=supabase.createClient(cfg.sbUrl,cfg.sbKey);}catch(e){}}
+  await loadAll();
+  document.getElementById('budgetMonthLabel').textContent = getBudgetCfg(S.budgetMonth).label||S.budgetMonth;
+  showTab('dashboard');
+}
+
+async function loadAll(){
+  S.transactions = await dbGet('fin_transactions');
+  S.snapshots = await dbGet('fin_snapshots');
+  S.mokaEntries = await dbGet('fin_moka_entries');
+  const br = await dbGet('fin_budgets');
+  S.budgets = {};
+  br.forEach(r=>{if(!S.budgets[r.month_key])S.budgets[r.month_key]={};S.budgets[r.month_key][r.category]=parseFloat(r.amount);});
+  if(!br.length) await seedBudgets();
+}
+
+async function seedBudgets(){
+  for(const [mk,md] of Object.entries(DBUDGETS)){
+    for(const c of md.cats){
+      await dbUpsert('fin_budgets',{month_key:mk,category:c.key,amount:c.amt});
+      if(!S.budgets[mk])S.budgets[mk]={};
+      S.budgets[mk][c.key]=c.amt;
+    }
+  }
+}
+
+// ── TAB ──────────────────────────────────────────────────────────
+function showTab(t){
+  ['dashboard','budget','trends','wealth','moka'].forEach((n,i)=>{
+    document.querySelectorAll('.tab')[i].classList.toggle('active',n===t);
+    document.getElementById('section-'+n).classList.toggle('active',n===t);
+  });
+  if(t==='dashboard')renderDashboard();
+  if(t==='budget')renderBudget();
+  if(t==='trends')renderTrends();
+  if(t==='wealth')renderWealth();
+  if(t==='moka')renderMoka();
+}
+
+// ── UTILS ────────────────────────────────────────────────────────
+function toast(msg,d=2400){const el=document.getElementById('toast');el.textContent=msg;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),d);}
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2)}
+function fmt$(n){return'$'+parseFloat(n||0).toLocaleString('en-CA',{minimumFractionDigits:2,maximumFractionDigits:2})}
+function fmtS$(n){return'$'+Math.round(Math.abs(n||0)).toLocaleString()}
+function overlayClick(e){if(e.target===document.getElementById('overlay'))closeModal()}
+function closeModal(){document.getElementById('overlay').classList.remove('open')}
+function openModal(title,body){document.getElementById('modalTitleText').textContent=title;document.getElementById('modalBody').innerHTML=body;document.getElementById('overlay').classList.add('open')}
+
+function getBudgetCfg(mk){
+  const def=DBUDGETS[mk];
+  if(!def)return{label:mk,total:0,cats:[],ei:0,note:''};
+  const ov=S.budgets[mk]||{};
+  return{...def,cats:def.cats.map(c=>({...c,amt:ov[c.key]??c.amt}))};
+}
+
+function getMonthData(mk){
+  const[y,m]=mk.split('-').map(Number);
+  const s=`${mk}-01`,e=m===12?`${y+1}-01-01`:`${y}-${String(m+1).padStart(2,'0')}-01`;
+  const all=S.transactions.filter(t=>t.date>=s&&t.date<e);
+  const expenses=all.filter(t=>t.type!=='income');
+  const income=all.filter(t=>t.type==='income').reduce((a,t)=>a+parseFloat(t.amount),0);
+  const totals={};
+  expenses.forEach(t=>{totals[t.category]=(totals[t.category]||0)+parseFloat(t.amount)});
+  return{totals,totalSpent:Object.values(totals).reduce((a,v)=>a+v,0),income,all};
+}
+
+function getPace(mk){
+  const[y,m]=mk.split('-').map(Number);
+  const td=new Date();
+  if(td.getFullYear()===y&&td.getMonth()+1===m) return td.getDate()/new Date(y,m,0).getDate();
+  return new Date(y,m-1,1)>td?0:1;
+}
+
+function getSmartPace(mk){
+  const cfg=getBudgetCfg(mk);const{totals}=getMonthData(mk);const pace=getPace(mk);
+  let fixedBudget=0,fixedSpent=0,variableBudget=0,variableSpent=0;
+  cfg.cats.forEach(c=>{
+    const sp=totals[c.key]||0;
+    if(FIXED_CATS.has(c.key)){fixedBudget+=c.amt;fixedSpent+=sp;}
+    else{variableBudget+=c.amt;variableSpent+=sp;}
+  });
+  const variableRatio=variableBudget>0?variableSpent/variableBudget:0;
+  const delta=variableRatio-pace; // positive = over pace
+  const [y,m]=mk.split('-').map(Number);
+  const daysInMonth=new Date(y,m,0).getDate();
+  const daysLeft=mk===`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`?daysInMonth-now.getDate():0;
+  return{fixedBudget,fixedSpent,variableBudget,variableSpent,variableRatio,delta,pace,daysLeft,daysInMonth};
+}
+
+function statusColor(ratio,pace){
+  if(ratio>1)return'var(--neg2)';
+  if(ratio>pace+0.12)return'var(--neg)';
+  if(ratio>pace-0.06)return'var(--warn)';
+  return'var(--pos)';
+}
+function statusText(ratio,pace){
+  if(ratio>1)return'Over budget';
+  if(ratio>pace+0.12)return'Over pace';
+  if(ratio>pace-0.06)return'Watch it';
+  return'On track';
+}
+
+function projMoka(dateStr){
+  const days=Math.max(0,(new Date(dateStr+'T12:00:00')-MOKA_DATE)/86400000);
+  return MOKA_START*Math.pow(1+0.06/365,days);
+}
+
+// ── DB ────────────────────────────────────────────────────────────
+function lsKey(t){return'finch_'+t}
+async function dbGet(table){
+  if(!db)return JSON.parse(localStorage.getItem(lsKey(table))||'[]');
+  const{data,error}=await db.from(table).select('*').order('created_at',{ascending:false});
+  return error?[]:data||[];
+}
+async function dbInsert(table,row){
+  if(!db){
+    const rows=JSON.parse(localStorage.getItem(lsKey(table))||'[]');
+    row={id:uid(),created_at:new Date().toISOString(),...row};
+    rows.unshift(row);localStorage.setItem(lsKey(table),JSON.stringify(rows));return row;
+  }
+  const{data,error}=await db.from(table).insert(row).select().single();
+  if(error){toast('Save error: '+error.message);return null}return data;
+}
+async function dbDelete(table,id){
+  if(!db){const rows=JSON.parse(localStorage.getItem(lsKey(table))||'[]').filter(r=>r.id!==id);localStorage.setItem(lsKey(table),JSON.stringify(rows));return;}
+  await db.from(table).delete().eq('id',id);
+}
+async function dbUpsert(table,row){
+  if(!db){
+    const rows=JSON.parse(localStorage.getItem(lsKey(table))||'[]');
+    const i=rows.findIndex(r=>r.month_key===row.month_key&&r.category===row.category);
+    if(i>=0)rows[i]={...rows[i],...row};else rows.push({id:uid(),...row});
+    localStorage.setItem(lsKey(table),JSON.stringify(rows));return;
+  }
+  await db.from(table).upsert(row,{onConflict:'month_key,category'});
+}
+
+async function dbInsertMoka(row){
+  if(!db){
+    const rows=JSON.parse(localStorage.getItem(lsKey('fin_moka_entries'))||'[]');
+    const i=rows.findIndex(r=>r.date===row.date);
+    if(i>=0){rows[i]={...rows[i],...row};localStorage.setItem(lsKey('fin_moka_entries'),JSON.stringify(rows));return rows[i];}
+    row={id:uid(),created_at:new Date().toISOString(),...row};
+    rows.unshift(row);localStorage.setItem(lsKey('fin_moka_entries'),JSON.stringify(rows));return row;
+  }
+  const{data,error}=await db.from('fin_moka_entries').upsert(row,{onConflict:'date'}).select().single();
+  if(error){toast('Save error');return null}return data;
+}
+function renderDashboard(){
+  const mk=S.budgetMonth;
+  const cfg=getBudgetCfg(mk);
+  const{totals,totalSpent,income}=getMonthData(mk);
+  const pace=getPace(mk);
+  const ratio=cfg.total?totalSpent/cfg.total:0;
+  const mainColor=statusColor(ratio,pace);
+  const snap=[...S.snapshots].sort((a,b)=>a.date.localeCompare(b.date)).slice(-1)[0]||null;
+  const prevSnap=[...S.snapshots].sort((a,b)=>a.date.localeCompare(b.date)).slice(-2,-1)[0]||null;
+  let nw=null,nwDelta=null;
+  if(snap){
+    const a=(+snap.chequing||0)+(+snap.savings||0)+(+snap.tfsa||0)+(+snap.moka||0);
+    const l=(+snap.credit_card||0)+(+snap.loan||0);
+    nw=a-l;
+    if(prevSnap){const pa=(+prevSnap.chequing||0)+(+prevSnap.savings||0)+(+prevSnap.tfsa||0)+(+prevSnap.moka||0);const pl=(+prevSnap.credit_card||0)+(+prevSnap.loan||0);nwDelta=nw-(pa-pl);}
+  }
+  const latestMokaEntry=[...S.mokaEntries].sort((a,b)=>a.date.localeCompare(b.date)).slice(-1)[0];
+  const mokaVal=latestMokaEntry?parseFloat(latestMokaEntry.balance):(snap?.moka!=null?parseFloat(snap.moka):null);
+  const mokaDate=latestMokaEntry?.date||snap?.date||null;
+  const mokaProj=projMoka(mokaDate||TODAY);
+  const mokaDelta=mokaVal!=null?+(mokaVal-mokaProj).toFixed(2):null;
+  const hr=now.getHours();
+  const greet=hr<12?'Good morning':hr<17?'Good afternoon':'Good evening';
+
+  const sp=getSmartPace(mk);
+  const paceColor=sp.delta>0.1?'var(--neg)':sp.delta>0?'var(--warn)':'var(--pos)';
+  const paceLabel=sp.delta>0.1?'Over pace':sp.delta>0?'Watch it':'On track';
+  const fixedPaidCount=getBudgetCfg(mk).cats.filter(c=>FIXED_CATS.has(c.key)&&(getMonthData(mk).totals[c.key]||0)>0).length;
+  const fixedTotalCount=getBudgetCfg(mk).cats.filter(c=>FIXED_CATS.has(c.key)).length;
+
+  document.getElementById('section-dashboard').innerHTML=`
+    <div style="margin-bottom:18px">
+      <div style="font-family:var(--fd);font-style:italic;font-size:24px;color:var(--text);margin-bottom:3px">${greet}.</div>
+      <div style="font-size:12px;color:var(--muted)">${MN[now.getMonth()]} ${now.getDate()} · Day ${now.getDate()} of ${sp.daysInMonth} · ${Math.round(sp.pace*100)}% through the month${sp.daysLeft?` · ${sp.daysLeft} days left`:''}</div>
+    </div>
+
+    <div class="g4" style="margin-bottom:14px">
+      <div class="stat">
+        <div class="stat-lbl">Net worth</div>
+        <div class="stat-val" style="font-size:18px">${nw!=null?fmtS$(nw):'—'}</div>
+        ${nwDelta!=null?`<div class="stat-sub" style="color:${nwDelta>=0?'var(--pos)':'var(--neg)'}">${nwDelta>=0?'↑ +':'↓ '}${fmtS$(nwDelta)}</div>`:''}
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">Variable spending pace</div>
+        <div class="stat-val" style="font-size:16px;color:${paceColor}">${paceLabel}</div>
+        <div class="stat-sub" style="color:${paceColor}">${Math.abs(Math.round(sp.delta*100))}% ${sp.delta>0?'over':'under'} · ${fmtS$(sp.variableSpent)} of ${fmtS$(sp.variableBudget)}</div>
+        <div class="stat-sub" style="color:var(--muted);margin-top:2px">Fixed: ${fixedPaidCount}/${fixedTotalCount} paid</div>
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">Income logged</div>
+        <div class="stat-val" style="font-size:18px;color:${income>0?'var(--pos)':'var(--text)'}">${fmtS$(income)}</div>
+        ${cfg.ei?`<div class="stat-sub">EI target: ${fmtS$(cfg.ei)}</div>`:''}
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">Moka</div>
+        <div class="stat-val" style="font-size:18px">${mokaVal!=null?fmtS$(mokaVal):'—'}</div>
+        <div class="stat-sub" style="color:${mokaDelta==null?'var(--muted)':mokaDelta>=0?'var(--pos)':'var(--neg)'}">${mokaDelta!=null?(mokaDelta>=0?'↑ +':'↓ ')+fmtS$(mokaDelta)+' vs proj':'6% growth target'}</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-size:12px;color:var(--mid)">${cfg.label} — overall pace</span>
+        <span style="font-size:12px;font-weight:500;color:${mainColor}">${fmtS$(totalSpent)} / ${fmtS$(cfg.total)}</span>
+      </div>
+      <div class="pace-bar-wrap">
+        <div class="pace-bar-fill" style="width:${Math.min(ratio*100,100)}%;background:${mainColor}"></div>
+        <div style="position:absolute;top:0;left:${pace*100}%;width:1.5px;height:6px;background:rgba(255,255,255,.28)"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-top:4px">
+        <span>${fmt$(totalSpent)} spent</span>
+        <span style="color:var(--muted)">Pace: ${fmt$(cfg.total*pace)} expected</span>
+        <span>${fmt$(cfg.total-totalSpent)} left</span>
+      </div>
+    </div>
+
+    <div id="dashAI" style="display:none" class="ai-block"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+      <button class="btn btn-p btn-sm" onclick="runAI()" id="aiBtn">✦ AI insight</button>
+      <button class="btn btn-p btn-sm" onclick="openLogModal('expense')">+ Log spending</button>
+      <button class="btn btn-p btn-sm" onclick="openLogModal('income')">+ Log income</button>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Category snapshot — ${cfg.label}</div>
+      ${cfg.cats.map(c=>{
+        const sp=totals[c.key]||0,r=sp/c.amt,col=statusColor(r,pace);
+        return`<div class="budget-row">
+          <div class="budget-row-top">
+            <span style="font-size:13px;color:var(--text)">${c.label}</span>
+            <span style="font-size:11px;color:${col}">${fmt$(sp)} / ${fmt$(c.amt)}</span>
+          </div>
+          <div class="budget-bar-wrap">
+            <div class="budget-bar" style="width:${Math.min(r*100,100)}%;background:${col}"></div>
+            <div class="budget-pace" style="left:${Math.min(pace*100,99)}%"></div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+async function runAI(){
+  if(!apiKey){toast('Add API key in Settings');openSettings();return}
+  const btn=document.getElementById('aiBtn');const el=document.getElementById('dashAI');
+  btn.disabled=true;btn.textContent='Thinking...';
+  el.style.display='block';el.textContent='Reading your numbers...';
+  const mk=S.budgetMonth;const cfg=getBudgetCfg(mk);
+  const{totals,totalSpent,income}=getMonthData(mk);
+  const pace=getPace(mk);
+  const snap=[...S.snapshots].sort((a,b)=>a.date.localeCompare(b.date)).slice(-1)[0];
+  let nwStr='unknown';
+  if(snap){const a=(+snap.chequing||0)+(+snap.savings||0)+(+snap.tfsa||0)+(+snap.moka||0);const l=(+snap.credit_card||0)+(+snap.loan||0);nwStr=fmtS$(a-l);}
+  const catLines=cfg.cats.map(c=>`  ${c.label}: ${fmt$(totals[c.key]||0)} of ${fmt$(c.amt)}`).join('\n');
+  try{
+    const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:280,messages:[{role:'user',content:`Financial snapshot. Person on career sabbatical May–July 2026. Cottage goal by 2036.
+Month: ${cfg.label}. Day ${now.getDate()} of ${new Date(now.getFullYear(),now.getMonth()+1,0).getDate()} (${Math.round(pace*100)}% through).
+Budget: ${fmtS$(cfg.total)}. Spent: ${fmtS$(totalSpent)}. Income logged: ${fmtS$(income)}.
+Net worth: ${nwStr}.
+Categories:\n${catLines}
+Write 2–3 sentences: honest, warm, specific. One pace observation, one callout, one suggestion. Not preachy.`}]})});
+    const d=await res.json();
+    el.textContent=d.content?.[0]?.text||'Could not generate insight.';
+  }catch(e){el.textContent='Check your API key in Settings.'}
+  btn.disabled=false;btn.textContent='✦ Refresh insight';
+}
+
+// ── BUDGET ───────────────────────────────────────────────────────
+function budgetMonthNav(dir){
+  const[y,m]=S.budgetMonth.split('-').map(Number);
+  const nd=new Date(y,m-1+dir,1);
+  S.budgetMonth=`${nd.getFullYear()}-${String(nd.getMonth()+1).padStart(2,'0')}`;
+  document.getElementById('budgetMonthLabel').textContent=getBudgetCfg(S.budgetMonth).label||S.budgetMonth;
+  renderBudget();
+}
+
+function renderBudget(){
+  const mk=S.budgetMonth;const cfg=getBudgetCfg(mk);
+  const{totals,totalSpent,income,all}=getMonthData(mk);
+  const pace=getPace(mk);
+  const ratio=cfg.total?totalSpent/cfg.total:0;
+  const mainColor=statusColor(ratio,pace);
+  const sorted=[...all].sort((a,b)=>b.date.localeCompare(a.date));
+
+  document.getElementById('budgetContent').innerHTML=`
+    <div class="g3" style="margin-bottom:12px">
+      <div class="stat"><div class="stat-lbl">Spent</div><div class="stat-val" style="color:${mainColor}">${fmtS$(totalSpent)}</div><div class="stat-sub">of ${fmtS$(cfg.total)} budget</div></div>
+      <div class="stat"><div class="stat-lbl">Remaining</div><div class="stat-val">${fmtS$(cfg.total-totalSpent)}</div>${cfg.note?`<div class="stat-sub">${cfg.note}</div>`:''}</div>
+      <div class="stat"><div class="stat-lbl">Income logged</div><div class="stat-val" style="color:${income>0?'var(--pos)':'var(--text)'}">${fmtS$(income)}</div>${cfg.ei?`<div class="stat-sub">EI target ${fmtS$(cfg.ei)}</div>`:''}</div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button class="btn btn-p btn-sm" style="flex:1" onclick="openLogModal('expense')">+ Log spending</button>
+      <button class="btn btn-p btn-sm" style="flex:1" onclick="openLogModal('income')">+ Log income</button>
+    </div>
+
+    <div class="card">
+      <div class="card-title">${cfg.label} — by category</div>
+      ${cfg.cats.map(c=>{
+        const sp=totals[c.key]||0;const r=sp/c.amt;const col=statusColor(r,pace);
+        return`<div class="budget-row">
+          <div class="budget-row-top">
+            <span style="font-size:13px;color:var(--text)">${c.label}</span>
+            <span style="font-size:11px;color:${col}">${statusText(r,pace)}</span>
+          </div>
+          <div class="budget-bar-wrap">
+            <div class="budget-bar" style="width:${Math.min(r*100,100)}%;background:${col}"></div>
+            <div class="budget-pace" style="left:${Math.min(pace*100,99)}%"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;margin-top:2px">
+            <span style="color:var(--mid)">${fmt$(sp)}</span>
+            <span style="color:${col}">${fmt$(c.amt-sp)} ${c.amt>=sp?'left':'over'}</span>
+            <span style="color:var(--muted)">${fmt$(c.amt)} budget</span>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+
+    <div class="card">
+      <div class="card-title">Recent entries</div>
+      ${!sorted.length?'<div class="empty">No entries logged yet</div>':
+        sorted.slice(0,25).map(t=>`
+          <div class="tx-row">
+            <div style="flex:1">
+              <div style="font-size:12px;color:var(--text)">${t.note||(t.type==='income'?t.source||'Income':t.category)}</div>
+              <div style="font-size:10px;color:var(--muted)">${t.date} · ${t.type==='income'?t.source||'Income':t.category}</div>
+            </div>
+            <div class="tx-amt ${t.type==='income'?'income':''}">${t.type==='income'?'+':'−'}${fmt$(t.amount)}</div>
+            <button class="del-btn" onclick="deleteTx('${t.id}')">×</button>
+          </div>`).join('')}
+    </div>`;
+}
+
+function openLogModal(type){
+  const mk=S.budgetMonth;const cfg=getBudgetCfg(mk);
+  if(type==='expense'){
+    openModal('Log spending',`
+      <div class="form-row"><label class="lbl">Date</label><input type="date" class="inp" id="txDate" value="${TODAY}"></div>
+      <div class="g2">
+        <div class="form-row"><label class="lbl">Amount ($)</label><input type="number" class="inp" id="txAmt" placeholder="0.00" step="0.01" min="0"></div>
+        <div class="form-row"><label class="lbl">Category</label><select class="inp" id="txCat"><option value="">Select…</option>${cfg.cats.map(c=>`<option value="${c.key}">${c.label}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-row"><label class="lbl">Note (optional)</label><input type="text" class="inp" id="txNote" placeholder="e.g. Loblaws weekly run"></div>
+      <div class="btn-row"><button class="btn btn-s btn-sm" onclick="closeModal()">Cancel</button><button class="btn btn-a" onclick="saveTx('expense')">Save</button></div>`);
+  } else {
+    openModal('Log income',`
+      <div class="form-row"><label class="lbl">Date</label><input type="date" class="inp" id="txDate" value="${TODAY}"></div>
+      <div class="g2">
+        <div class="form-row"><label class="lbl">Amount ($)</label><input type="number" class="inp" id="txAmt" placeholder="0.00" step="0.01" min="0"></div>
+        <div class="form-row"><label class="lbl">Source</label><select class="inp" id="txSource"><option value="EI">EI</option><option value="Severance">Severance</option><option value="Freelance">Freelance</option><option value="Other">Other</option></select></div>
+      </div>
+      <div class="form-row"><label class="lbl">Note (optional)</label><input type="text" class="inp" id="txNote" placeholder="e.g. First EI deposit"></div>
+      <div class="btn-row"><button class="btn btn-s btn-sm" onclick="closeModal()">Cancel</button><button class="btn btn-a" onclick="saveTx('income')">Save</button></div>`);
+  }
+}
+
+async function saveTx(type){
+  const date=document.getElementById('txDate')?.value;
+  const amt=parseFloat(document.getElementById('txAmt')?.value);
+  if(!date||!amt||amt<=0){toast('Enter date and amount');return}
+  const note=document.getElementById('txNote')?.value?.trim()||null;
+  let row;
+  if(type==='income'){
+    row={date,amount:amt,category:'income',note,type:'income',source:document.getElementById('txSource')?.value||'Other'};
+  } else {
+    const cat=document.getElementById('txCat')?.value;
+    if(!cat){toast('Select a category');return}
+    row={date,amount:amt,category:cat,note,type:'expense'};
+  }
+  const saved=await dbInsert('fin_transactions',row);
+  if(saved){S.transactions.unshift(saved);closeModal();toast('Saved ✓');renderBudget();if(document.getElementById('section-dashboard').classList.contains('active'))renderDashboard();}
+}
+
+async function deleteTx(id){
+  await dbDelete('fin_transactions',id);
+  S.transactions=S.transactions.filter(t=>t.id!==id);
+  toast('Deleted');renderBudget();
+  if(document.getElementById('section-dashboard').classList.contains('active'))renderDashboard();
+}
+
+// ── TRENDS ───────────────────────────────────────────────────────
+function renderTrends(){
+  const months=Object.keys(DBUDGETS).sort();
+  const data=months.map(mk=>{const cfg=getBudgetCfg(mk);const{totals,totalSpent,income}=getMonthData(mk);return{mk,cfg,totals,totalSpent,income};});
+  const hasData=data.some(d=>d.totalSpent>0||d.income>0);
+  const el=document.getElementById('trendsContent');
+  if(!hasData){el.innerHTML=`<div class="empty" style="padding:48px">Log spending in the Budget tab to see trends.</div>`;return;}
+
+  const allCatKeys=new Set();const catLabels={};
+  data.forEach(d=>d.cfg.cats.forEach(c=>{allCatKeys.add(c.key);catLabels[c.key]=c.label;}));
+
+  function getStreak(key){
+    let streak=0,over=null;
+    for(let i=data.length-1;i>=0;i--){
+      const d=data[i];const sp=d.totals[key]||0;const bdg=d.cfg.cats.find(c=>c.key===key)?.amt||0;
+      if(!bdg||(!sp&&i<data.length-1))continue;
+      const isOver=sp>bdg;
+      if(over===null){over=isOver;streak=1;}else if(isOver===over)streak++;else break;
+    }
+    return{streak,over};
+  }
+
+  const lastActive=data.filter(d=>d.totalSpent>0).slice(-1)[0];
+  const movers=lastActive?[...allCatKeys].map(k=>{
+    const sp=lastActive.totals[k]||0;const bdg=lastActive.cfg.cats.find(c=>c.key===k)?.amt||0;
+    if(!bdg)return null;
+    return{key:k,label:catLabels[k]||k,sp,bdg,pct:(sp-bdg)/bdg};
+  }).filter(Boolean).sort((a,b)=>Math.abs(b.pct)-Math.abs(a.pct)).slice(0,6):[];
+
+  el.innerHTML=`
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title">Month-by-month overview</div>
+      <div style="overflow-x:auto">
+        <table class="trend-table">
+          <thead><tr><th>Month</th><th>Budget</th><th>Spent</th><th>vs budget</th><th>Income</th></tr></thead>
+          <tbody>${data.map(d=>{
+            const delta=d.totalSpent-d.cfg.total;const hasAny=d.totalSpent>0||d.income>0;
+            return`<tr style="${!hasAny?'opacity:.35':''}">
+              <td style="color:var(--mid)">${d.cfg.label}</td>
+              <td>${fmtS$(d.cfg.total)}</td>
+              <td style="color:${hasAny?statusColor(d.totalSpent/d.cfg.total,1):'var(--muted)'}">${fmtS$(d.totalSpent)}</td>
+              <td style="color:${delta>0?'var(--neg)':delta<0?'var(--pos)':'var(--muted)'}">${delta>0?'+':''}${fmtS$(delta)}</td>
+              <td style="color:var(--pos)">${d.income>0?fmtS$(d.income):'—'}</td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>
+      </div>
+    </div>
+
+    ${movers.length?`<div class="card" style="margin-bottom:12px">
+      <div class="card-title">Biggest movers — ${lastActive?.cfg?.label||''}</div>
+      ${movers.map(m=>`<div class="budget-row" style="padding:7px 0">
+        <div class="budget-row-top">
+          <span style="font-size:13px;color:var(--text)">${m.label}</span>
+          <span style="font-size:11px;color:${m.pct>0.1?'var(--neg)':m.pct<-0.05?'var(--pos)':'var(--warn)'}">${m.pct>0?'+':''}${Math.round(m.pct*100)}%</span>
+        </div>
+        <div class="budget-bar-wrap">
+          <div class="budget-bar" style="width:${Math.min(m.sp/m.bdg*100,100)}%;background:${m.pct>0.1?'var(--neg)':m.pct<-0.05?'var(--pos)':'var(--warn)'}"></div>
+          <div class="budget-pace" style="left:99%"></div>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px">${fmt$(m.sp)} spent · ${fmt$(m.bdg)} budget</div>
+      </div>`).join('')}
+    </div>`:''}
+
+    <div class="card">
+      <div class="card-title">Streaks — consecutive months over/under</div>
+      ${[...allCatKeys].map(k=>{
+        const{streak,over}=getStreak(k);if(!streak)return'';
+        return`<div class="budget-row" style="padding:8px 0">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:13px;color:var(--text)">${catLabels[k]||k}</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="streak-badge ${over?'sb-neg':'sb-pos'}">${over?'over budget':'under budget'}</span>
+              <span style="font-size:12px;color:${over?'var(--neg)':'var(--pos)'};font-weight:500">${streak} month${streak>1?'s':''}</span>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+
+    ${S.mokaEntries.length?`<div class="card" style="margin-top:4px">
+      <div class="card-title">Moka — month-over-month <span style="font-size:11px;font-style:normal;color:var(--muted)">full view in Moka tab</span></div>
+      ${getMokaMonthly(S.mokaEntries).map(m=>`
+        <div class="budget-row" style="padding:7px 0">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+            <span style="font-size:13px;color:var(--text)">${m.month}</span>
+            <span style="font-size:12px;font-weight:500;color:${m.change>=0?'var(--pos)':'var(--neg)'}">${m.change>=0?'+':''}${fmt$(m.change)} (${m.pct>=0?'+':''}${m.pct}%)</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted)">
+            <span>Close: ${fmt$(m.balance)}</span>
+            <span style="color:${m.balance>=projMoka(m.month+'-28')?'var(--pos)':'var(--neg)'}">${m.balance>=projMoka(m.month+'-28')?'↑ ahead of':'↓ behind'} 6% target</span>
+          </div>
+        </div>`).join('')}
+    </div>`:''}`;
+
+}
+
+// ── WEALTH ───────────────────────────────────────────────────────
+let nwChart=null,mokaChart=null;
+
+function renderWealth(){
+  const snaps=[...S.snapshots].sort((a,b)=>a.date.localeCompare(b.date));
+  const latest=snaps[snaps.length-1]||null;
+  const prev=snaps[snaps.length-2]||null;
+  const el=document.getElementById('wealthContent');
+
+  let topHTML='<div class="empty" style="padding:24px;margin-bottom:12px">Log your first snapshot to begin tracking.</div>';
+  if(latest){
+    const a=(+latest.chequing||0)+(+latest.savings||0)+(+latest.tfsa||0)+(+latest.moka||0);
+    const l=(+latest.credit_card||0)+(+latest.loan||0);const nw=a-l;
+    let chgHTML='';
+    if(prev){const pa=(+prev.chequing||0)+(+prev.savings||0)+(+prev.tfsa||0)+(+prev.moka||0);const pl=(+prev.credit_card||0)+(+prev.loan||0);const d=nw-(pa-pl);chgHTML=`<div class="stat-sub" style="color:${d>=0?'var(--pos)':'var(--neg)'}">${d>=0?'↑ +':'↓ '}${fmtS$(d)}</div>`;}
+    topHTML=`
+      <div class="g4" style="margin-bottom:12px">
+        <div class="stat"><div class="stat-lbl">Net worth</div><div class="stat-val" style="font-size:17px">${fmtS$(nw)}</div>${chgHTML}</div>
+        <div class="stat"><div class="stat-lbl">Total assets</div><div class="stat-val" style="font-size:17px;color:var(--pos)">${fmtS$(a)}</div></div>
+        <div class="stat"><div class="stat-lbl">Liabilities</div><div class="stat-val" style="font-size:17px;color:var(--neg)">${fmtS$(l)}</div></div>
+        <div class="stat"><div class="stat-lbl">Moka</div><div class="stat-val" style="font-size:17px">${latest.moka!=null?fmtS$(latest.moka):'—'}</div><div class="stat-sub" style="color:var(--muted)">Proj: ${fmtS$(projMoka(latest.date))}</div></div>
+      </div>
+      <div class="g2" style="margin-bottom:12px">
+        <div class="card" style="margin-bottom:0">
+          <div class="sec-hd">Assets</div>
+          ${[['chequing','Chequing'],['savings','Savings'],['tfsa','TFSA'],['moka','Moka']].filter(([k])=>latest[k]!=null).map(([k,lbl])=>`<div class="snap-row"><span class="snap-acct">${lbl}</span><span class="snap-val">${fmt$(latest[k])}</span></div>`).join('')}
+        </div>
+        <div class="card" style="margin-bottom:0">
+          <div class="sec-hd">Liabilities</div>
+          ${[['credit_card','Credit card'],['loan','Line of credit']].filter(([k])=>latest[k]!=null&&latest[k]>0).map(([k,lbl])=>`<div class="snap-row"><span class="snap-acct">${lbl}</span><span class="snap-val liability">−${fmt$(latest[k])}</span></div>`).join('')||'<div class="empty" style="padding:10px 0;text-align:left">No liabilities</div>'}
+        </div>
+      </div>`;
+  }
+
+  el.innerHTML=`
+    ${topHTML}
+    <div style="margin-bottom:12px"><button class="btn btn-p btn-sm" onclick="openSnapModal()">+ Log snapshot</button></div>
+    ${snaps.length>1?`<div class="card" style="margin-bottom:12px"><div class="card-title">Net worth over time</div><div style="position:relative;height:180px"><canvas id="nwChart"></canvas></div></div>`:''}
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title">Moka — actual vs projected (6%/yr)</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Starting value May 1: ${fmt$(MOKA_START)}. Dashed line = 6% annual growth.</div>
+      <div style="position:relative;height:180px"><canvas id="mokaChart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Snapshot history</div>
+      ${!snaps.length?'<div class="empty">No snapshots yet</div>':[...snaps].reverse().slice(0,12).map(s=>{
+        const a=(+s.chequing||0)+(+s.savings||0)+(+s.tfsa||0)+(+s.moka||0);
+        const l=(+s.credit_card||0)+(+s.loan||0);const nw=a-l;
+        return`<div class="tx-row">
+          <div style="flex:1">
+            <div style="font-size:12px;color:var(--text)">${s.date}${s.note?' — '+s.note:''}</div>
+            <div style="font-size:10px;color:var(--muted)">Assets ${fmtS$(a)} · Liabilities ${fmtS$(l)}</div>
+          </div>
+          <div style="text-align:right;margin-right:8px">
+            <div style="font-size:13px;font-weight:500;color:${nw>=0?'var(--pos)':'var(--neg)'}">${fmtS$(nw)}</div>
+          </div>
+          <button class="del-btn" onclick="deleteSnap('${s.id}')">×</button>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  setTimeout(()=>{renderNWChart(snaps);renderMokaChart(snaps);},80);
+}
+
+function chartOpts(){
+  return{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+    plugins:{legend:{display:false},tooltip:{backgroundColor:'#241840',titleColor:'#EEE0F8',bodyColor:'#B0A0C8',borderColor:'rgba(180,150,220,.2)',borderWidth:1,callbacks:{label:ctx=>' '+fmt$(ctx.raw)}}},
+    scales:{
+      x:{grid:{color:'rgba(180,150,220,.06)'},ticks:{color:'#6A5880',font:{size:9},maxTicksLimit:6}},
+      y:{grid:{color:'rgba(180,150,220,.06)'},ticks:{color:'#6A5880',font:{size:9},callback:v=>'$'+Math.round(v).toLocaleString()}}
+    }};
+}
+
+function renderNWChart(snaps){
+  if(nwChart){nwChart.destroy();nwChart=null;}
+  const ctx=document.getElementById('nwChart');if(!ctx||snaps.length<2)return;
+  const labels=snaps.map(s=>s.date);
+  const vals=snaps.map(s=>{const a=(+s.chequing||0)+(+s.savings||0)+(+s.tfsa||0)+(+s.moka||0);const l=(+s.credit_card||0)+(+s.loan||0);return+(a-l).toFixed(2);});
+  nwChart=new Chart(ctx,{type:'line',data:{labels,datasets:[{data:vals,borderColor:'#C8B0E8',backgroundColor:'rgba(200,176,232,.06)',borderWidth:1.5,pointRadius:4,pointBackgroundColor:'#C8B0E8',tension:.3,fill:true}]},options:chartOpts()});
+}
+
+function renderMokaChart(snaps){
+  if(mokaChart){mokaChart.destroy();mokaChart=null;}
+  const ctx=document.getElementById('mokaChart');if(!ctx)return;
+  const dateSet=new Set();
+  let d=new Date(MOKA_DATE);const end=new Date('2026-07-31');
+  while(d<=end){dateSet.add(d.toISOString().split('T')[0]);d.setDate(d.getDate()+7);}
+  snaps.filter(s=>s.moka!=null).forEach(s=>dateSet.add(s.date));
+  const labels=[...dateSet].sort();
+  const projVals=labels.map(dt=>+projMoka(dt).toFixed(2));
+  const actualMap={};snaps.filter(s=>s.moka!=null).forEach(s=>{actualMap[s.date]=parseFloat(s.moka);});
+  const actualVals=labels.map(dt=>actualMap[dt]!==undefined?actualMap[dt]:null);
+  mokaChart=new Chart(ctx,{type:'line',data:{labels,datasets:[
+    {data:projVals,borderColor:'rgba(200,176,232,.3)',borderDash:[5,4],borderWidth:1.5,pointRadius:0,tension:.3,fill:false},
+    {data:actualVals,borderColor:'#7EC8A0',backgroundColor:'rgba(126,200,160,.08)',borderWidth:2,pointRadius:labels.map(dt=>actualMap[dt]!==undefined?4:0),pointBackgroundColor:'#7EC8A0',tension:.3,fill:true,spanGaps:false}
+  ]},options:chartOpts()});
+}
+
+function openSnapModal(){
+  openModal('Log snapshot',`
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.5">Leave any field blank you don't have handy.</div>
+    <div class="form-row"><label class="lbl">Date</label><input type="date" class="inp" id="sDate" value="${TODAY}"></div>
+    <div class="g2">
+      <div class="form-row"><label class="lbl">Chequing ($)</label><input type="number" class="inp" id="sCHQ" step="0.01"></div>
+      <div class="form-row"><label class="lbl">Savings ($)</label><input type="number" class="inp" id="sSAV" step="0.01"></div>
+      <div class="form-row"><label class="lbl">TFSA ($)</label><input type="number" class="inp" id="sTFSA" step="0.01"></div>
+      <div class="form-row"><label class="lbl">Moka ($)</label><input type="number" class="inp" id="sMOKA" step="0.01"></div>
+      <div class="form-row"><label class="lbl">Credit card owed ($)</label><input type="number" class="inp" id="sCC" step="0.01"></div>
+      <div class="form-row"><label class="lbl">Line of credit owed ($)</label><input type="number" class="inp" id="sLOC" step="0.01"></div>
+    </div>
+    <div class="form-row"><label class="lbl">Note (optional)</label><input type="text" class="inp" id="sNote" placeholder="e.g. Paid off credit card"></div>
+    <div class="btn-row"><button class="btn btn-s btn-sm" onclick="closeModal()">Cancel</button><button class="btn btn-a" onclick="saveSnap()">Save snapshot</button></div>`);
+}
+
+async function saveSnap(){
+  const date=document.getElementById('sDate')?.value;if(!date){toast('Select a date');return}
+  const g=id=>{const v=document.getElementById(id)?.value;return v?parseFloat(v):null};
+  const row={date,chequing:g('sCHQ'),savings:g('sSAV'),tfsa:g('sTFSA'),moka:g('sMOKA'),credit_card:g('sCC'),loan:g('sLOC'),note:document.getElementById('sNote')?.value||null};
+  const saved=await dbInsert('fin_snapshots',row);
+  if(saved){S.snapshots.unshift(saved);closeModal();toast('Snapshot saved ✓');renderWealth();}
+}
+
+async function deleteSnap(id){
+  await dbDelete('fin_snapshots',id);S.snapshots=S.snapshots.filter(s=>s.id!==id);toast('Deleted');renderWealth();
+}
+
+// ── MOKA ─────────────────────────────────────────────────────────
+let mokaLineChart=null, mokaVolChart=null;
+
+function getMokaWithChanges(){
+  const sorted=[...S.mokaEntries].sort((a,b)=>a.date.localeCompare(b.date));
+  return sorted.map((e,i)=>{
+    const bal=parseFloat(e.balance);
+    const prev=i>0?parseFloat(sorted[i-1].balance):null;
+    return{...e,balance:bal,change:prev!==null?+(bal-prev).toFixed(2):null};
+  });
+}
+
+function getMokaMonthly(entries){
+  const byMonth={};
+  entries.forEach(e=>{const mk=e.date.slice(0,7);if(!byMonth[mk]||e.date>byMonth[mk].date)byMonth[mk]=e;});
+  const months=Object.keys(byMonth).sort();
+  return months.map((mk,i)=>{
+    const bal=parseFloat(byMonth[mk].balance);
+    const prevBal=i>0?parseFloat(byMonth[months[i-1]].balance):MOKA_START;
+    const chg=+(bal-prevBal).toFixed(2);
+    return{month:mk,balance:bal,change:chg,pct:+((chg/prevBal)*100).toFixed(2)};
+  });
+}
+
+function getMokaYearly(entries){
+  const byYear={};
+  entries.forEach(e=>{const yr=e.date.slice(0,4);if(!byYear[yr]||e.date>byYear[yr].date)byYear[yr]=e;});
+  const years=Object.keys(byYear).sort();
+  return years.map((yr,i)=>{
+    const bal=parseFloat(byYear[yr].balance);
+    const prevBal=i>0?parseFloat(byYear[years[i-1]].balance):MOKA_START;
+    const chg=+(bal-prevBal).toFixed(2);
+    return{year:yr,balance:bal,change:chg,pct:+((chg/prevBal)*100).toFixed(2)};
+  });
+}
+
+function renderMoka(){
+  const entries=getMokaWithChanges();
+  const latest=entries[entries.length-1]||null;
+  const el=document.getElementById('mokaContent');
+
+  const currentBal=latest?latest.balance:null;
+  const projToday=+projMoka(TODAY).toFixed(2);
+  const delta=currentBal!==null?+(currentBal-projToday).toFixed(2):null;
+  const totalReturn=currentBal!==null?+(currentBal-MOKA_START).toFixed(2):null;
+  const totalReturnPct=currentBal!==null?+((totalReturn/MOKA_START)*100).toFixed(2):null;
+
+  const monthly=getMokaMonthly(S.mokaEntries);
+  const yearly=getMokaYearly(S.mokaEntries);
+
+  const totalDeposited=S.mokaEntries.filter(e=>e.entry_type==='deposit').reduce((s,e)=>s+(parseFloat(e.deposit_amount)||0),0);
+  const totalContributed=+(MOKA_START+totalDeposited).toFixed(2);
+  const interestEarned=currentBal!==null?+(currentBal-totalContributed).toFixed(2):null;
+
+  el.innerHTML=`
+    <div class="g4" style="margin-bottom:12px">
+      <div class="stat">
+        <div class="stat-lbl">Current balance</div>
+        <div class="stat-val" style="font-size:17px">${currentBal!==null?fmt$(currentBal):'—'}</div>
+        <div class="stat-sub">${latest?latest.date+' entry':'No entries yet'}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">6% projection today</div>
+        <div class="stat-val" style="font-size:17px">${fmt$(projToday)}</div>
+        <div class="stat-sub" style="color:var(--muted)">Where you should be</div>
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">vs projection</div>
+        <div class="stat-val" style="font-size:17px;color:${delta===null?'var(--text)':delta>=0?'var(--pos)':'var(--neg)'}">${delta!==null?(delta>=0?'+':'')+fmt$(delta):'—'}</div>
+        <div class="stat-sub" style="color:${delta===null?'var(--muted)':delta>=0?'var(--pos)':'var(--neg)'}">${delta!==null?(delta>=0?'↑ ahead':'↓ behind'):'log an entry'}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">Since May 1, 2026</div>
+        <div class="stat-val" style="font-size:17px;color:${totalReturn===null?'var(--text)':totalReturn>=0?'var(--pos)':'var(--neg)'}">${totalReturn!==null?(totalReturn>=0?'+':'')+fmt$(totalReturn):'—'}</div>
+        <div class="stat-sub" style="color:${totalReturnPct===null?'var(--muted)':totalReturnPct>=0?'var(--pos)':'var(--neg)'}">${totalReturnPct!==null?(totalReturnPct>=0?'+':'')+totalReturnPct+'% total return':'start: '+fmt$(MOKA_START)}</div>
+      </div>
+    </div>
+
+    <div class="g3" style="margin-bottom:12px">
+      <div class="stat">
+        <div class="stat-lbl">Total contributed</div>
+        <div class="stat-val" style="font-size:16px">${fmt$(totalContributed)}</div>
+        <div class="stat-sub" style="color:var(--muted)">Start ${fmt$(MOKA_START)}${totalDeposited>0?' + '+fmt$(totalDeposited)+' deposits':''}</div>
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">Interest earned</div>
+        <div class="stat-val" style="font-size:16px;color:${interestEarned===null?'var(--text)':interestEarned>=0?'var(--pos)':'var(--neg)'}">${interestEarned!==null?(interestEarned>=0?'+':'')+fmt$(interestEarned):'—'}</div>
+        <div class="stat-sub" style="color:var(--muted)">Growth only, excl. deposits</div>
+      </div>
+      <div class="stat">
+        <div class="stat-lbl">Deposits made</div>
+        <div class="stat-val" style="font-size:16px">${fmt$(totalDeposited)}</div>
+        <div class="stat-sub" style="color:var(--muted)">${S.mokaEntries.filter(e=>e.entry_type==='deposit').length} top-up${S.mokaEntries.filter(e=>e.entry_type==='deposit').length!==1?'s':''}</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title">
+        <span>Actual vs projected — May to July 2026</span>
+        <span style="display:flex;gap:12px;font-size:10px;color:var(--muted)">
+          <span style="color:var(--pos)">— actual</span>
+          <span style="opacity:.5">-- projected</span>
+        </span>
+      </div>
+      ${!entries.length?'<div class="empty">Log entries to see your growth chart</div>':'<div style="position:relative;height:180px"><canvas id="mokaLineChart"></canvas></div>'}
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title">Day-over-day change</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Each bar is one logged day. Calculated automatically from your entries. Green = up, orange = down.</div>
+      ${entries.filter(e=>e.change!==null).length<2?'<div class="empty">Log at least two entries to see volatility</div>':'<div style="position:relative;height:120px"><canvas id="mokaVolChart"></canvas></div>'}
+    </div>
+
+    <div class="g2" style="margin-bottom:12px">
+      <div class="card" style="margin-bottom:0">
+        <div class="card-title">Month over month</div>
+        ${!monthly.length?'<div class="empty">No data yet</div>':`
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr>
+              <th style="font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:4px 6px;border-bottom:1px solid var(--border);text-align:left">Month</th>
+              <th style="font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:4px 6px;border-bottom:1px solid var(--border);text-align:right">Close</th>
+              <th style="font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:4px 6px;border-bottom:1px solid var(--border);text-align:right">Change</th>
+              <th style="font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:4px 6px;border-bottom:1px solid var(--border);text-align:right">%</th>
+            </tr></thead>
+            <tbody>
+              ${monthly.map(m=>`<tr>
+                <td style="padding:6px;border-bottom:1px solid var(--border);color:var(--mid);font-size:11px">${m.month}</td>
+                <td style="padding:6px;border-bottom:1px solid var(--border);text-align:right;font-size:11px">${fmt$(m.balance)}</td>
+                <td style="padding:6px;border-bottom:1px solid var(--border);text-align:right;color:${m.change>=0?'var(--pos)':'var(--neg)'};font-size:11px">${m.change>=0?'+':''}${fmt$(m.change)}</td>
+                <td style="padding:6px;border-bottom:1px solid var(--border);text-align:right;color:${m.pct>=0?'var(--pos)':'var(--neg)'};font-size:11px">${m.pct>=0?'+':''}${m.pct}%</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>`}
+      </div>
+      <div class="card" style="margin-bottom:0">
+        <div class="card-title">Year over year</div>
+        ${!yearly.length?'<div class="empty">No data yet</div>':`
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr>
+              <th style="font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:4px 6px;border-bottom:1px solid var(--border);text-align:left">Year</th>
+              <th style="font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:4px 6px;border-bottom:1px solid var(--border);text-align:right">Close</th>
+              <th style="font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:4px 6px;border-bottom:1px solid var(--border);text-align:right">Change</th>
+              <th style="font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:4px 6px;border-bottom:1px solid var(--border);text-align:right">%</th>
+            </tr></thead>
+            <tbody>
+              ${yearly.map(y=>`<tr>
+                <td style="padding:6px;border-bottom:1px solid var(--border);color:var(--mid);font-size:11px">${y.year}</td>
+                <td style="padding:6px;border-bottom:1px solid var(--border);text-align:right;font-size:11px">${fmt$(y.balance)}</td>
+                <td style="padding:6px;border-bottom:1px solid var(--border);text-align:right;color:${y.change>=0?'var(--pos)':'var(--neg)'};font-size:11px">${y.change>=0?'+':''}${fmt$(y.change)}</td>
+                <td style="padding:6px;border-bottom:1px solid var(--border);text-align:right;color:${y.pct>=0?'var(--pos)':'var(--neg)'};font-size:11px">${y.pct>=0?'+':''}${y.pct}%</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>`}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Entry log</div>
+      ${!entries.length?'<div class="empty">No entries yet — log your first one above</div>':
+        [...entries].reverse().slice(0,15).map(e=>`
+          <div class="tx-row">
+            <div style="flex:1">
+              <div style="display:flex;align-items:center;gap:7px">
+                <span style="font-size:12px;color:var(--text)">${e.date}</span>
+                <span style="font-size:10px;padding:1px 7px;border-radius:10px;${e.entry_type==='deposit'?'background:rgba(200,176,232,.2);color:var(--accent)':'background:rgba(126,200,160,.12);color:var(--pos)'}">${e.entry_type==='deposit'?'deposit':'interest'}</span>
+              </div>
+              ${e.entry_type==='deposit'&&e.deposit_amount?`<div style="font-size:10px;color:var(--accent)">+${fmt$(e.deposit_amount)} added</div>`:''}
+              ${e.change!==null?`<div style="font-size:10px;color:${e.change>=0?'var(--pos)':'var(--neg)'}">${e.change>=0?'↑ +':'↓ '}${fmt$(e.change)} day-over-day${e.entry_type==='deposit'&&e.deposit_amount?` (incl. +${fmt$(e.deposit_amount)} deposit)`:''}</div>`:'<div style="font-size:10px;color:var(--muted)">First entry</div>'}
+              ${e.note?`<div style="font-size:10px;color:var(--muted);margin-top:1px">${e.note}</div>`:''}
+            </div>
+            <div style="text-align:right;margin-right:10px">
+              <div style="font-size:13px;font-weight:500;color:var(--text)">${fmt$(e.balance)}</div>
+              <div style="font-size:10px;color:${e.balance>=projMoka(e.date)?'var(--pos)':'var(--neg)'}">${e.balance>=projMoka(e.date)?'↑':'↓'} proj ${fmtS$(projMoka(e.date))}</div>
+            </div>
+            <button class="del-btn" onclick="deleteMokaEntry('${e.id}')">×</button>
+          </div>`).join('')}
+    </div>`;
+
+  setTimeout(()=>{renderMokaLineChart(entries);renderMokaVolChart(entries);},80);
+}
+
+function renderMokaLineChart(entries){
+  if(mokaLineChart){mokaLineChart.destroy();mokaLineChart=null;}
+  const ctx=document.getElementById('mokaLineChart');if(!ctx)return;
+  const dateSet=new Set();
+  let d=new Date(MOKA_DATE);const end=new Date('2026-07-31');
+  while(d<=end){dateSet.add(d.toISOString().split('T')[0]);d.setDate(d.getDate()+7);}
+  entries.forEach(e=>dateSet.add(e.date));
+  const labels=[...dateSet].sort();
+  const projVals=labels.map(dt=>+projMoka(dt).toFixed(2));
+  const actualMap={};entries.forEach(e=>{actualMap[e.date]=e.balance;});
+  const actualVals=labels.map(dt=>actualMap[dt]!==undefined?actualMap[dt]:null);
+  mokaLineChart=new Chart(ctx,{type:'line',data:{labels,datasets:[
+    {data:projVals,borderColor:'rgba(200,176,232,.3)',borderDash:[5,4],borderWidth:1.5,pointRadius:0,tension:.3,fill:false,label:'Projected'},
+    {data:actualVals,borderColor:'#7EC8A0',backgroundColor:'rgba(126,200,160,.07)',borderWidth:2,pointRadius:labels.map(dt=>actualMap[dt]!==undefined?4:0),pointBackgroundColor:'#7EC8A0',tension:.3,fill:true,spanGaps:false,label:'Actual'}
+  ]},options:chartOpts()});
+}
+
+function renderMokaVolChart(entries){
+  if(mokaVolChart){mokaVolChart.destroy();mokaVolChart=null;}
+  const ctx=document.getElementById('mokaVolChart');if(!ctx)return;
+  const withChanges=entries.filter(e=>e.change!==null);
+  if(withChanges.length<1)return;
+  const labels=withChanges.map(e=>e.date);
+  const vals=withChanges.map(e=>e.change);
+  const colors=vals.map(v=>v>=0?'rgba(126,200,160,.8)':'rgba(232,144,96,.8)');
+  mokaVolChart=new Chart(ctx,{type:'bar',data:{labels,datasets:[{data:vals,backgroundColor:colors,borderRadius:2,borderSkipped:false}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{backgroundColor:'#241840',titleColor:'#EEE0F8',bodyColor:'#B0A0C8',borderColor:'rgba(180,150,220,.2)',borderWidth:1,callbacks:{label:ctx=>(ctx.raw>=0?'+':'')+fmt$(ctx.raw)}}},
+      scales:{
+        x:{grid:{display:false},ticks:{color:'#6A5880',font:{size:9},maxTicksLimit:8}},
+        y:{grid:{color:'rgba(180,150,220,.06)'},ticks:{color:'#6A5880',font:{size:9},callback:v=>(v>=0?'+':'')+fmtS$(v)}}
+      }}});
+}
+
+function openMokaModal(){
+  openModal('Log Moka entry',`
+    <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.5">Enter your current Moka balance. Day-over-day change is calculated automatically.</div>
+    <div class="g2">
+      <div class="form-row"><label class="lbl">Date</label><input type="date" class="inp" id="mkDate" value="${TODAY}"></div>
+      <div class="form-row"><label class="lbl">Total balance ($)</label><input type="number" class="inp" id="mkBal" placeholder="${MOKA_START}" step="0.01"></div>
+    </div>
+    <div class="form-row">
+      <label class="lbl">Entry type</label>
+      <div style="display:flex;gap:8px">
+        <label style="flex:1;background:var(--surface);border:1px solid var(--border2);border-radius:var(--rs);padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:8px" id="typeInterestLbl">
+          <input type="radio" name="mkType" value="interest" id="mkTypeInterest" checked style="accent-color:var(--accent)" onchange="document.getElementById('mkDepositRow').style.display='none'">
+          <div><div style="font-size:12px;color:var(--text)">Interest / growth</div><div style="font-size:10px;color:var(--muted)">Normal market movement</div></div>
+        </label>
+        <label style="flex:1;background:var(--surface);border:1px solid var(--border2);border-radius:var(--rs);padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:8px">
+          <input type="radio" name="mkType" value="deposit" id="mkTypeDeposit" style="accent-color:var(--accent)" onchange="document.getElementById('mkDepositRow').style.display='block'">
+          <div><div style="font-size:12px;color:var(--text)">Top-up / deposit</div><div style="font-size:10px;color:var(--muted)">I added money</div></div>
+        </label>
+      </div>
+    </div>
+    <div class="form-row" id="mkDepositRow" style="display:none">
+      <label class="lbl">Deposit amount ($) <span style="color:var(--muted);font-style:italic">— how much did you add?</span></label>
+      <input type="number" class="inp" id="mkDeposit" placeholder="0.00" step="0.01" min="0">
+    </div>
+    <div class="form-row"><label class="lbl">Note (optional)</label><input type="text" class="inp" id="mkNote" placeholder="e.g. Monthly top-up"></div>
+    <div class="btn-row">
+      <button class="btn btn-p" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-a" onclick="saveMokaEntry()">Save entry</button>
+    </div>`);
+}
+
+async function saveMokaEntry(){
+  const date=document.getElementById('mkDate')?.value;
+  const bal=parseFloat(document.getElementById('mkBal')?.value);
+  if(!date||!bal||bal<=0){toast('Enter a date and balance');return}
+  const note=document.getElementById('mkNote')?.value?.trim()||null;
+  const entryType=document.getElementById('mkTypeDeposit')?.checked?'deposit':'interest';
+  const depositAmt=entryType==='deposit'?parseFloat(document.getElementById('mkDeposit')?.value||'0')||null:null;
+  const saved=await dbInsertMoka({date,balance:bal,note,entry_type:entryType,deposit_amount:depositAmt});
+  if(saved){
+    const i=S.mokaEntries.findIndex(e=>e.date===date);
+    if(i>=0)S.mokaEntries[i]=saved;else S.mokaEntries.unshift(saved);
+    closeModal();toast('Entry saved ✓');renderMoka();
+    if(document.getElementById('section-dashboard').classList.contains('active'))renderDashboard();
+  }
+}
+
+async function deleteMokaEntry(id){
+  await dbDelete('fin_moka_entries',id);
+  S.mokaEntries=S.mokaEntries.filter(e=>e.id!==id);
+  toast('Deleted');renderMoka();
+}
+function openEditBudgetModal(){
+  const mk=S.budgetMonth;const cfg=getBudgetCfg(mk);
+  const fixedCats=cfg.cats.filter(c=>FIXED_CATS.has(c.key));
+  const varCats=cfg.cats.filter(c=>!FIXED_CATS.has(c.key));
+  openModal(`Edit budgets — ${cfg.label}`,`
+    <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">Adjust category amounts for this month. Edit intentionally — not mid-month to mask an overspend.</div>
+    <div class="sec-hd">Fixed costs</div>
+    ${fixedCats.map(c=>`<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <label style="font-size:12px;color:var(--mid);min-width:150px;flex-shrink:0">${c.label}</label>
+      <input type="number" class="inp" id="bedit_${c.key}" value="${c.amt}" step="0.01" style="max-width:120px" oninput="updateBudgetTotal()">
+    </div>`).join('')}
+    <div class="sec-hd" style="margin-top:10px">Variable costs</div>
+    ${varCats.map(c=>`<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <label style="font-size:12px;color:var(--mid);min-width:150px;flex-shrink:0">${c.label}</label>
+      <input type="number" class="inp" id="bedit_${c.key}" value="${c.amt}" step="0.01" style="max-width:120px" oninput="updateBudgetTotal()">
+    </div>`).join('')}
+    <div style="font-size:11px;color:var(--muted);margin-top:12px;padding:8px 10px;background:var(--surface);border-radius:var(--rs)">New total: <span id="budgetEditTotal" style="color:var(--accent);font-weight:500">${fmt$(cfg.total)}</span></div>
+    <div class="btn-row">
+      <button class="btn btn-p" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-a" onclick="saveEditedBudgets('${mk}')">Save changes</button>
+    </div>`);
+}
+
+function updateBudgetTotal(){
+  const mk=S.budgetMonth;const cfg=getBudgetCfg(mk);
+  const total=cfg.cats.reduce((s,c)=>{const v=parseFloat(document.getElementById('bedit_'+c.key)?.value)||0;return s+v;},0);
+  const el=document.getElementById('budgetEditTotal');if(el)el.textContent=fmt$(total);
+}
+
+async function saveEditedBudgets(mk){
+  const cfg=getBudgetCfg(mk);
+  for(const c of cfg.cats){
+    const val=parseFloat(document.getElementById('bedit_'+c.key)?.value);
+    if(!isNaN(val)&&val>=0){
+      await dbUpsert('fin_budgets',{month_key:mk,category:c.key,amount:val});
+      if(!S.budgets[mk])S.budgets[mk]={};S.budgets[mk][c.key]=val;
+    }
+  }
+  closeModal();toast('Budgets updated ✓');renderBudget();
+  if(document.getElementById('section-dashboard').classList.contains('active'))renderDashboard();
+}
+
+function openSettings(){
+  const cfg=JSON.parse(localStorage.getItem('finch_cfg')||'{}');
+  openModal('Settings',`
+    <div class="form-row">
+      <label class="lbl">Anthropic API key</label>
+      <input type="password" class="inp" id="cfgApi" value="${cfg.apiKey||''}" placeholder="sk-ant-…">
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">Powers AI insights on Dashboard.</div>
+    </div>
+    <div style="border-top:1px solid var(--border);margin:14px 0;padding-top:14px">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Supabase is optional — data persists locally in your browser without it.</div>
+      <div class="form-row"><label class="lbl">Project URL</label><input class="inp" type="text" id="cfgUrl" value="${cfg.sbUrl||''}" placeholder="https://xxx.supabase.co"></div>
+      <div class="form-row"><label class="lbl">Anon key</label><input type="password" class="inp" id="cfgKey" value="${cfg.sbKey||''}" placeholder="eyJ…"></div>
+    </div>
+    <div style="font-size:11px;color:var(--muted);background:var(--surface);padding:10px 12px;border-radius:var(--rs);margin-bottom:12px">Run the SQL at the top of this file to create Finch's tables, then enter credentials above.</div>
+    <div class="btn-row">
+      <button class="btn btn-p" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-a" onclick="saveSettings()">Save & reload</button>
+    </div>`);
+}
+
+function saveSettings(){
+  localStorage.setItem('finch_cfg',JSON.stringify({apiKey:document.getElementById('cfgApi')?.value?.trim()||'',sbUrl:document.getElementById('cfgUrl')?.value?.trim()||'',sbKey:document.getElementById('cfgKey')?.value?.trim()||''}));
+  window.location.reload();
+}
+
+window.addEventListener('DOMContentLoaded',init);
+</script>
+</body>
+</html>
